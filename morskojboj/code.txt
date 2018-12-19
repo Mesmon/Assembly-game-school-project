@@ -1,0 +1,1262 @@
+.486
+.model flat, stdcall
+option casemap :none
+
+include \masm32\include\windows.inc
+include \masm32\include\kernel32.inc
+include \masm32\include\user32.inc
+include \masm32\include\msvcrt.inc
+includelib msvcrt.lib
+
+;drd graphics
+include drd.inc
+includelib drd.lib
+
+;sound 
+includelib \masm32\lib\winmm.lib 
+include \masm32\include\winmm.inc
+
+.data
+
+	;screen size
+	screen_w DWORD 1000
+	screen_h DWORD 600
+	
+	;background 
+	background_img BYTE "background.bmp", 0
+	background_obj Img <0,0,0,0>
+	
+	;ship 
+	ship_img BYTE "ship_0.bmp", 0
+	ship_obj Img 2 dup (<1,1,1,1>)
+	current_ship Img <0,0,0,0>    ; the holder for the current frame of the animation
+	ship_speed DWORD 3
+	ship_out_of_bound DWORD 1
+	ship_x DWORD 0
+	ship_y DWORD 0
+	dir DWORD 1 ;1 - right -1 - left
+
+	;cannon
+	cannon_img BYTE "cannon.bmp", 0
+	cannon_obj Img <0,0,0,0>
+	cannon_w DWORD 100
+	cannon_h DWORD 40
+	cannon_x DWORD 450
+	cannon_speed DWORD 3
+	boost DWORD 0								
+
+	;random
+	STime SYSTEMTIME  {} 
+	ran DWORD ?
+
+	;torpedos
+	torpedo_img BYTE "t00.bmp", 0
+	torpedo_obj Img 40 dup (<16,16,16,16>) ; an array of 40 torpedos
+	current_torpedo Img <0,0,0,0>   ; the holder for the current frame of the animation
+	torpedo_jmp DWORD 16
+	torpedo_change DWORD 0
+	torpedo_y DWORD 460
+	torpedo_x DWORD 0
+	in_process DWORD 0
+
+	;hud & score
+	hud_img BYTE "hud.bmp", 0
+	hud_obj Img <0,0,0,0>
+	heart_img BYTE "heart.bmp", 0	
+	heart_obj Img <0,0,0,0>
+	heart_amount DWORD 3
+	heart_x DWORD 150
+	mini_torpedo_img BYTE "mini_torpedo.bmp", 0
+	mini_torpedo_obj Img <0,0,0,0>
+	mini_torpedo_amount DWORD 10
+	mini_torpedo_x DWORD 8
+	score_board_img BYTE "score_board.bmp", 0 
+	score_board_obj Img <0,0,0,0>
+	score_board_x DWORD 0
+	score DWORD 0
+	score_img BYTE "s0.bmp", 0
+	score_obj Img 6 dup (<0,0,0,0>)
+	current_score Img <0,0,0,0>
+	score_x DWORD 0
+	score_y DWORD 7
+	score_jmp DWORD 0
+
+
+	;explosion 
+	boom_img BYTE "b0.bmp", 0
+	boom_obj Img 10 dup (<1,1,1,1>)  ; an array of 10 frames of the explosion animation
+	current_boom Img <0,0,0,0>     ; the holder for the current frame of the animation
+	boom_jmp DWORD 0
+	boom_x DWORD 0
+	boom_y DWORD 0
+	boom_in_process DWORD 0
+	collision_check DWORD 0
+	boom_img_change DWORD 0
+	boom_turn DWORD 0
+	after_boom_mov DWORD 1
+
+	;start and game over screens
+	start_img BYTE "start_screen.bmp", 0 
+	start_obj Img <0,0,0,0>
+	over_h_img BYTE "gameoverheart.bmp", 0
+	over_h_obj Img <0,0,0,0>
+	over_t_img BYTE "gameovertorpedo.bmp", 0
+	over_t_obj Img <0,0,0,0>
+	about_game_img BYTE "about_game.bmp", 0
+	about_game_obj Img <0,0,0,0>
+	about_p_img BYTE "about_project.bmp", 0
+	about_p_obj Img <0,0,0,0>
+	win_img BYTE "win.bmp", 0 
+	win_obj Img <0,0,0,0>
+	how_img BYTE "how_to.bmp", 0
+	how_obj Img <0,0,0,0> 
+	game_over DWORD 0
+
+	;sound
+	music db "music", 0
+	s_music db "s_music", 0 
+
+
+.code
+
+	Random PROC min:DWORD, max:DWORD	;random number generator between min and max
+
+		
+		pusha                     ; pushing all the registers into the stack to avoid changing register's value
+		mov eax, max              ;
+		sub eax, min		      ; defining a number that when it is the divisor, the remainder will suffice as 
+		mov max, eax              ; a number between the min and max values
+		inc max                   ;
+	
+		invoke GetSystemTime ,addr STime		; getting the systemtime and saving it in STime
+
+		mov ax, STime.wMilliseconds				; moving the current milliseconds to ax
+		mov bx, STime.wSecond					; moving the current seconds to bx
+
+		mul ax					  ; multiplying to make square in order to get more randomness
+		mul bx					  ; multiplying the square of millisecond in seconds in order to get more randomness
+
+		xor edx, edx			  ; making place for the remainder
+		div max					  ; dividing previous calculation by the divisor we set at the start of the function
+		add edx, min			  ; adding the min number to the remainder so the number will be in the right range 
+		mov ran, edx			  ; moving the random number to a variable
+
+		popa
+	ret
+	Random ENDP
+
+	torpedo_init PROC				    ; torpedo initializing
+										; setting all the counters for the looped loading of torpedo images
+			xor esi, esi				; esi - counter of first digit
+			xor edx, edx			    ; edx - changing the place where the Img struct will be created for each individual image	
+			xor ebx,ebx					; ebx - store the place with the chagne where the Img struct will be created for each individual image
+			xor ecx, ecx				; ecx - counter of tens digit
+										
+			
+
+		fill:															; loading loop
+														
+														
+			mov eax, 030h ; '0'											; tens digit change
+			add eax, ecx
+			mov torpedo_img[1], al
+		
+			mov eax, 030h ; '0'											; digit change
+			add eax, esi
+			mov torpedo_img[2], al  
+		
+			mov ebx, offset torpedo_obj									; loading current image into corresponding place by moving the offset of the "Array" to ebx
+			add ebx, edx												; and than adding edx(the change) to ebx
+			pusha														; moving register's data to stack so we don't lose them during image load
+			invoke drd_imageLoadFile, offset torpedo_img, ebx			; loading corresponding image in the corresponding place
+			popa														; returning values to registers
+			cmp esi, 9													; checking if the digit is 9		
+			je add_ten													; if yes - jump to add_ten
+			inc esi														; if not - increase the digit change
+			add edx, 16													; adding to the memory placement change 1 slot (Img struct is 4 DWORD which is 16 BYTE)
+		
+		jmp fill														; load the next images
+
+		add_ten:	
+		inc ecx															; increasing the tens digit by 1
+		cmp ecx, 4														; checking if it's equal to the maximum allowed
+		je exit															; if equal - jump to exit	
+		mov esi, 0														; if not -  move 0 to the digits
+		add edx, 16														; adding to the memory placement change 1 slot (Img struct is 4 DWORD which is 16 BYTE)
+		jmp fill														; continue the loading with a new tens digit
+				
+		exit: 
+			mov eax, torpedo_obj.surface								; moving to eax the data from the first torpedo struct 
+			mov current_torpedo.surface, eax							; and applying it to a stand alone struct which is "current_torpedo"
+			mov eax, torpedo_obj.iwidth
+			mov current_torpedo.iwidth, eax
+			mov eax, torpedo_obj.iheight
+			mov current_torpedo.iheight, eax
+			mov eax, torpedo_obj.hasSrcKey
+			mov current_torpedo.hasSrcKey, eax
+	
+	ret 
+	torpedo_init ENDP
+	
+	
+	boom_init PROC	                                       ; explosion animation init
+														   ; same as torpedo init but without the tens digit and the connected parts to it								  
+			;img counter + 1							   ; because there are only 10 images (0-9)	
+			xor esi, esi
+			;obj counter + 16
+			xor edx, edx
+			xor ebx,ebx
+		fill:
+			
+			mov eax, 030h ; '0'
+			add eax, esi
+			mov boom_img[1], al  
+			mov ebx, offset boom_obj
+			add ebx, edx
+			pusha
+			invoke drd_imageLoadFile, offset boom_img, ebx
+			cmp esi, 9
+			popa
+			je exit
+			inc esi
+			add edx, 16
+		jmp fill
+
+		exit:
+			
+			mov boom_jmp, 0	
+			mov ebx, boom_jmp
+			mov eax,  boom_obj[ebx].surface
+			mov current_boom.surface, eax
+			mov eax, boom_obj[ebx].iwidth
+			mov current_boom.iwidth, eax;
+			mov eax, boom_obj[ebx].iheight
+			mov current_boom.iheight, eax
+			mov eax, boom_obj[ebx].hasSrcKey
+			mov current_boom.hasSrcKey, eax
+			ret
+
+	ret
+	boom_init ENDP
+
+	ship_change PROC									; changing the direction and the image accordin to direction 
+		 	
+			neg dir										; chaging direction. 1 - right, -1 - left
+			cmp dir, 1									; checking if the direction is to right
+			je to_right									; if yes - jump to to_right 
+		
+			to_left:									; if not - the direction and the settings are to the left
+			mov eax, screen_w							; setting ship's x position: when the direction is to the left - the only visible part
+			sub eax, 1									; of the ship at start of movement is the left side of 1 pixel width 
+			mov ship_x, eax 
+			
+			mov ebx, 16									; moving to ebx 16 in order to use it as indicator to the second image in the "array" (4 DWORD im Img are equal to 16 BYTE)
+			mov eax, ship_obj[ebx].surface				; moving to eax the data from the ship
+			mov current_ship.surface, eax				; and applying it to a stand alone struct which is "current_ship"
+			mov eax, ship_obj[ebx].iwidth
+			mov current_ship.iwidth, eax;
+			mov eax, ship_obj[ebx].iheight
+			mov current_ship.iheight, eax
+			mov eax, ship_obj[ebx].hasSrcKey
+			mov current_ship.hasSrcKey, eax
+
+			jmp exit
+
+			to_right:									; the direction and the settings are to the right
+			mov eax, current_ship.iwidth				; setting ship's x position: when the direction is to the right - the only visible
+			neg eax										; part of the ship at start of movement is the right side of 1 pixel width
+			add eax, 1									; to place it in the right place I take the width of the ship and find the negative of it
+			mov ship_x, eax								; after that I'm moving it one pixel to the right
+
+			mov eax, ship_obj.surface					; moving to eax the data from the ship
+			mov current_ship.surface, eax				; and applying it to a stand alone struct which is "current_ship"
+			mov eax, ship_obj.iwidth
+			mov current_ship.iwidth, eax;
+			mov eax, ship_obj.iheight
+			mov current_ship.iheight, eax
+			mov eax, ship_obj.hasSrcKey
+			mov current_ship.hasSrcKey, eax
+
+			exit:
+				ret
+	ret
+	ship_change ENDP			
+
+	ship_init PROC													; ship init
+																	; same as torpedo_init and boom_init but loading only 2 images			
+			;img counter + 1
+			xor esi, esi
+			;obj counter + 16
+			xor edx, edx
+			xor ebx,ebx
+		fill:
+			
+			mov eax, 030h ; '0'
+			add eax, esi
+			mov ship_img[5], al  
+			mov ebx, offset ship_obj
+			add ebx, edx
+			pusha
+			invoke drd_imageLoadFile, offset ship_img, ebx
+			cmp esi, 1
+			popa
+			je exit
+			inc esi
+			add edx, 16
+		jmp fill
+
+		exit:
+			
+				
+			mov ebx, 0
+			mov eax,  ship_obj[ebx].surface
+			mov current_ship.surface, eax
+			mov eax, ship_obj[ebx].iwidth
+			mov current_ship.iwidth, eax;
+			mov eax, ship_obj[ebx].iheight
+			mov current_ship.iheight, eax
+			mov eax, ship_obj[ebx].hasSrcKey
+			mov current_ship.hasSrcKey, eax
+				
+			;ship position and direction		
+			invoke Random, 0, 10					; get a random number between 0 and 10				
+			cmp ran, 5								; comparing it to 5	
+			jle dir_m1								; if lower or equal - jump dir_m1
+			mov dir, 1								; if greater - move direction 1
+			jmp continue							; jumping over "dir_m1" so we won't have dir -1 every time
+
+			dir_m1:
+			mov dir, -1								; move direction -1
+	
+			continue:
+			invoke ship_change						
+			mov ship_y, 100							; moving ship_y position to 100
+
+	ret
+	ship_init ENDP
+
+	hud_init PROC                                                         ; Loading all images for hud (score board, hearts, small torpedo)
+			
+		invoke drd_imageLoadFile, offset hud_img, offset hud_obj
+		invoke drd_imageLoadFile, offset heart_img, offset heart_obj
+		invoke drd_imageLoadFile, offset mini_torpedo_img, offset mini_torpedo_obj
+		invoke drd_imageLoadFile, offset score_board_img, offset score_board_obj
+		mov eax, screen_w																; setting the x position of the score board to be exactly at the center of the window 
+		sub eax, score_board_obj.iwidth													; moving screen width to eax and subtracting score board's width
+		mov ebx, 2																		; moving 2 to ebx and moving 0 to edx in order to get ready for division by 2
+		xor edx, edx
+		div ebx																			; divide eax by 2 
+		mov score_board_x, eax															; moving the proper position to the variable
+
+	ret 	
+	hud_init ENDP
+
+	score_init PROC														; score initializing
+																		; same as torpedo_init and boom_init but loading only 6 images	
+			;img counter + 1
+			xor esi, esi
+			;obj counter + 16
+			xor edx, edx
+			xor ebx,ebx
+		fill:
+			
+			mov eax, 030h ; '0'
+			add eax, esi
+			mov score_img[1], al  
+			mov ebx, offset score_obj
+			add ebx, edx
+			pusha
+			invoke drd_imageLoadFile, offset score_img, ebx
+			cmp esi, 5
+			popa
+			je exit
+			inc esi
+			add edx, 16
+
+		jmp fill
+
+		exit:
+			
+			mov score_jmp, 0	
+			mov ebx, score_jmp
+			mov eax,  score_obj[ebx].surface
+			mov current_score.surface, eax
+			mov eax, score_obj[ebx].iwidth
+			mov current_score.iwidth, eax;
+			mov eax, score_obj[ebx].iheight
+			mov current_score.iheight, eax
+			mov eax, score_obj[ebx].hasSrcKey
+			mov current_score.hasSrcKey, eax
+			mov score_jmp, 16
+
+			;score position
+			mov eax, score_board_obj.iwidth					; calculating position for the score to be inside the score board
+			sub eax, current_score.iwidth
+			mov ebx, 2
+			xor edx, edx
+			div ebx 
+			add eax, score_board_x
+			mov score_x, eax
+
+	ret
+	score_init ENDP 
+
+
+	init PROC																										; initializing proccess: loading assets, positions and margins
+
+		invoke drd_imageLoadFile, offset background_img, offset background_obj										; loading background, cannon, game over, win images
+		invoke drd_imageLoadFile, offset cannon_img, offset cannon_obj
+		invoke drd_imageLoadFile, offset over_h_img, offset over_h_obj
+		invoke drd_imageLoadFile, offset over_t_img, offset over_t_obj
+		invoke drd_imageLoadFile, offset win_img, offset win_obj
+
+		mov game_over, 0								;set game over to 0 and reset stats and score
+		mov mini_torpedo_amount, 10
+		mov heart_amount, 3
+		mov score, 0
+				
+		invoke torpedo_init								; invoking all the initializing functions above
+ 		invoke boom_init
+		invoke ship_init
+		invoke hud_init
+		invoke score_init
+	
+	ret
+	init ENDP
+
+
+	
+	turn PROC													; intended lag
+																; making some actions stretch to more frames
+		mov boom_img_change, 0									; moving to the variable that checks if to change frame 0			
+		cmp boom_in_process, 1									; checking if the explosion animation is on
+		jne exit												; if not - jump to exit
+		check_boom: 
+			cmp boom_turn, 2									; check if 2 frames had passed 
+			jne add_boom_turn									; if not - jump to add_boom_turn 
+			mov boom_img_change, 1								; if yes - making preparation to change frame of animation
+			mov boom_turn, 0									; reseting the frames count
+			jmp exit
+
+		add_boom_turn:											; increasing the frame checker by one
+			inc boom_turn
+			jmp exit
+
+		exit:
+			ret
+	ret
+	turn ENDP
+
+	change_score PROC									; check what score is it and change the image accordingly
+														; also checking if win score is reached
+
+		inc score										; increase score by 1
+
+		cmp score, 6									; compare score to 6
+		je win											; if equal - jump win
+	
+		mov ebx, score_jmp								; if not - change to the next score image in the "array"
+		mov eax, score_obj[ebx].surface
+		mov current_score.surface, eax
+		mov eax, score_obj[ebx].iwidth
+		mov current_score.iwidth, eax;
+		mov eax, score_obj[ebx].iheight
+		mov current_score.iheight, eax
+		mov eax, score_obj[ebx].hasSrcKey
+		mov current_score.hasSrcKey, eax
+		add score_jmp, 16
+
+		jmp exit
+
+		win:											; moving 3 to game_over which means winning
+			mov game_over, 3		
+		
+		exit:
+	ret
+	change_score ENDP
+
+	cannon_movement PROC								; movement of cannon
+		
+		mov boost, 0									; every time sets the boost to 0 so it will not boost when unnecessary	
+		invoke GetAsyncKeyState, VK_LSHIFT				; check if left shift has been pressed
+		cmp eax, 0										
+		je check_dir									; if not - jump to check_dir
+		mov boost, 1									; if yes - move to boost 1, which means that boost is active 
+
+		check_dir:									
+		cmp boost, 1									; check if boost equal to 1
+		je check_boost_dir								; if yes - jump check_boost_dir
+
+		;right											; if not check if the right arrow key is pressed
+		invoke GetAsyncKeyState, VK_RIGHT	
+		cmp eax, 0
+		jne right										; if yes - jump right
+
+		;left											; if not check if the left arrow key is pressed
+		invoke GetAsyncKeyState, VK_LEFT				
+		cmp eax, 0
+		jne left										; if yes - jump left
+
+		jmp exit										; if nothing pressed jump - exit
+
+		right:											; movement to right
+			mov eax, screen_w							; setting the right border in eax
+			sub eax, cannon_obj.iwidth						
+			mov ebx, cannon_speed
+			sub eax, ebx
+			cmp cannon_x, eax							; checking if cannon's x is bigger than the border
+			jg exit 									; if yes - jump exit
+			add cannon_x, ebx							; if not - add cannon_x the speed
+			jmp exit					
+
+		left:											; same as with the right border and movement
+			mov eax, 0
+			mov ebx, cannon_speed
+			add eax, ebx
+			cmp cannon_x, eax
+			jl exit
+			sub cannon_x, ebx
+			jmp exit
+
+		check_boost_dir:
+
+		;right											;same as before but now the speed and the borders are bigger or smaller by 2
+		invoke GetAsyncKeyState, VK_RIGHT
+		cmp eax, 0
+		jne right1
+
+		;left
+		invoke GetAsyncKeyState, VK_LEFT
+		cmp eax, 0
+		jne left1
+
+		jmp exit
+
+		right1:
+			mov eax, screen_w
+			sub eax, cannon_obj.iwidth
+			mov ebx, cannon_speed
+			add ebx, 2
+			sub eax, ebx
+			cmp cannon_x, eax
+			jg exit
+			add cannon_x, ebx
+			jmp exit
+
+		left1:
+			mov eax, 0
+			mov ebx, cannon_speed
+			add ebx, 2
+			add eax, ebx
+			cmp cannon_x, eax
+			jl exit
+			sub cannon_x, ebx
+			jmp exit
+
+		exit:
+			ret
+
+	ret
+	cannon_movement ENDP
+
+	in_process_0 PROC									; setting torpedo is not moving 
+														; when there is an impact the torpedo will dissapear using this function (in_process_0). 		
+		;boom position									; so when it's called it's calculating the position of the boom animation 
+		cmp ship_x, 0									; check if ship_x is lower than 0
+		jl x_0											; if lower - jump x_0
+		mov ebx, screen_w								; if greater - calculate in ebx the right border
+		sub ebx, current_boom.iwidth
+		cmp ship_x, ebx									; check if ship_x is lower than the right border 
+		jl normal_x										; if lower - jump normal_x
+		mov boom_x, ebx									; if not - move into boom_x the right border 
+		jmp set_y										; jump set_y 
+
+		x_0:											; moving boom_x - 0, the left border
+		mov boom_x, 0
+		jmp set_y										; jump set_y
+
+		
+		normal_x:										; moves boom_x the ship_x
+		mov eax, ship_x
+		mov boom_x, eax
+
+		set_y:											; calculates the y of the boom animation
+		mov ecx, ship_y									; by taking the ship_y and subtracting the half of the ship height 
+		mov eax, current_ship.iheight					; in order to make the boom animation appear higher
+		mov ebx, 2
+		xor edx, edx
+		div ebx
+		sub ecx, eax
+		mov boom_y, ecx
+
+		mov eax, torpedo_obj.surface					; moving the first torpedo data to current_torpedo
+		mov current_torpedo.surface, eax
+		mov eax, torpedo_obj.iwidth
+		mov current_torpedo.iwidth, eax
+		mov eax, torpedo_obj.iheight
+		mov current_torpedo.iheight, eax
+		mov eax, torpedo_obj.hasSrcKey
+		mov current_torpedo.hasSrcKey, eax
+		
+		pusha											; calculating torpedo_x by calculating the right amount above the cannon_x so the gaps in the right and in the left of the cannon will be equal
+		xor eax, eax
+		mov eax, cannon_w 
+		sub eax, current_torpedo.iwidth
+		mov ebx, 2
+		mov edx, 0
+		div ebx
+		mov ecx, cannon_x
+		add ecx, eax
+		mov torpedo_x, ecx 
+		popa
+		mov torpedo_y, 460								; moving torpedo_y back on the cannon
+		
+		mov in_process, 0								; the variable that says if the torpedo is in movement set to 0
+		mov torpedo_jmp, 16								; ready the memory place variable for the second place (Img = 4 DWORD = 16 BYTE)
+			
+	ret
+	in_process_0 ENDP
+	
+	change_mini_torpedo PROC							; decreasing the small torpedos amount when you shoot the torpedo
+														; if it reaches the minimum you lose
+		cmp mini_torpedo_amount, 0						; if mini_torpedo_amount is equal to 0
+		je over											; jump to over
+		dec mini_torpedo_amount							; if not - decrease the amount by 1
+		jmp exit
+		over:
+			mov game_over, 2							; moving game_over 2 - means that he lost because the torpedos anded
+		exit:
+	ret
+	change_mini_torpedo ENDP
+	
+
+	torpedo_movement PROC																	; movement of torpedo, changing images
+
+		cmp in_process, 1																	; if torpedo is "in the water" - if it was shot
+		je shoot																			; jump shoot
+		
+		invoke GetAsyncKeyState, VK_SPACE													; if not - check if space is pressed
+		cmp eax, 0																	
+		jne start_shoot																		; if yes - jump start_shoot
+		
+		no_shoot:																			; if not - no shoot protocol
+			pusha	
+			xor eax, eax																	; calculating torpedo_x by calculating the right amount above the cannon_x
+			mov eax, cannon_w																; so the gaps in the right and in the left of the cannon will be equal
+			sub eax, current_torpedo.iwidth
+			mov ebx, 2
+			mov edx, 0
+			div ebx
+			mov ecx, cannon_x
+			add ecx, eax
+     		mov torpedo_x, ecx 
+			popa
+		
+		invoke drd_imageSetTransparent, offset current_torpedo, 038ff68h					; set the color #38ff68 to transparent in the torepdo image 
+		invoke drd_imageDraw, offset current_torpedo, torpedo_x, torpedo_y					; drawing the torpedo on the back buffer in the corresponding places
+		
+		jmp exit
+		
+		shoot:
+			
+  			cmp torpedo_jmp, 656															; check if torepdo jmp reached final picture (all images * 16 + 16)				
+			je init_torpedo_jmp																; if yes - jump init_torpedo_jmp
+
+			sub torpedo_y, 4																; if not - mov the torepedo selected pixels up
+			add torpedo_change, 1															; add 1 torpedo_change
+			mov eax, torpedo_change															; check when to change the images					
+			mov ebx, 2     ;tochange														; when the remainder of the division of torpedo_change by the number tochange is 0 	
+			xor edx, edx																	; change the image, if not - jump no_change
+			div ebx
+			cmp edx, 0
+			jne no_change
+			
+			;change
+			mov torpedo_change, 0															; setting the counter to 0
+			mov ebx, torpedo_jmp															; moving torpedo_jmp to ebx so I can use it to transfer the data of the image from the right place
+			mov eax, torpedo_obj[ebx].surface												; moving the next torpedo data to current_torpedo
+			mov current_torpedo.surface, eax
+			mov eax, torpedo_obj[ebx].iwidth
+			mov current_torpedo.iwidth, eax;
+			mov eax, torpedo_obj[ebx].iheight
+			mov current_torpedo.iheight, eax
+			mov eax, torpedo_obj[ebx].hasSrcKey
+			mov current_torpedo.hasSrcKey, eax
+			add torpedo_jmp, 16																; adding 16 for next place in the array
+
+			no_change:																		; if the image should not change
+				pusha																		; calculating the proper x postion of the torpedo so it's center will remain at the same x 
+				xor eax, eax																; no matter what is the width of the current torpedo
+				xor ebx, ebx
+				mov ebx, torpedo_jmp
+				sub ebx, 16
+				mov eax, torpedo_obj[ebx].iwidth
+				sub eax, current_torpedo.iwidth
+				mov ebx, 2
+				mov edx, 0
+				div	ebx
+		     	add torpedo_x, eax
+				popa
+
+				invoke drd_imageSetTransparent, offset current_torpedo, 038ff68h			; setting the grren background transparent
+				invoke drd_imageDraw, offset current_torpedo, torpedo_x, torpedo_y			; drawing the torpedo on the back buffer in the corresponding places
+
+				jmp exit
+
+
+
+			init_torpedo_jmp:
+				invoke in_process_0															; when all of the images have been shown the torpedo is reseting
+				jmp exit
+
+			start_shoot: 
+				mov in_process, 1															; indicating that the torpedo is shot and the animation and the movement in the y should begin
+				invoke change_mini_torpedo													; decreasing the amount of torpedos and checking if all are shot
+				jmp shoot																	; after we are ready for the movement - jump shoot
+
+				
+			exit:
+				ret	
+			
+	ret 
+	torpedo_movement ENDP
+
+	collision_manager1 PROC														; checking collision for the upper left corner of torpedo with ship
+		
+		check_x:																; checking if torpedo x is bigger than ship x but smaller than ship x + ship width 									
+			mov eax, ship_x	
+			cmp torpedo_x, eax
+			jge continue_x
+		
+			jmp exit
+		
+		continue_x:
+			mov eax, ship_x
+			add eax, current_ship.iwidth
+			cmp torpedo_x, eax
+			jle check_y
+	
+			jmp exit															; if not - stop checking
+
+		check_y:																; if yes - check y
+			mov eax, ship_y														; checks if torpedo y is bigger than ship y but smaller than ship y + ship height
+			cmp torpedo_y, eax
+			jge continue_y
+
+			jmp exit
+		
+		continue_y: 
+			mov eax, ship_y
+			add eax, current_ship.iheight
+			cmp torpedo_y, eax
+			jg exit																; if not - stop checking
+	
+		boom:																	; if yes -change score, invoke torpedos in_process_0 ,
+			invoke in_process_0													; invoke boom_in_process, 1 and stop ship movement
+			invoke change_score
+			mov boom_in_process, 1
+			mov after_boom_mov, 0
+
+		exit: 
+			ret
+
+	ret
+	collision_manager1 ENDP
+
+	collision_manager2 PROC														; same as collision_manager1 but checks the upper right corner
+
+		check_x2:
+			mov eax, torpedo_x
+			add eax, current_torpedo.iwidth
+			cmp ship_x, eax
+			jle continue_x2
+
+			jmp exit
+	
+		continue_x2:
+			mov eax, torpedo_x
+			add eax, current_torpedo.iwidth
+			mov ebx, ship_x
+			add ebx, current_ship.iwidth
+			cmp ebx, eax
+			jge check_y2
+
+			jmp exit
+	
+		check_y2: 
+			mov eax, ship_y
+			cmp torpedo_y, eax
+			jge continue_y2
+
+			jmp exit
+		
+		continue_y2: 
+			mov eax, ship_y
+			add eax, current_ship.iheight
+			cmp torpedo_y, eax
+			jg exit
+			jne boom
+			
+			jmp exit
+
+			boom: 
+				invoke change_score
+				invoke in_process_0
+				mov boom_in_process, 1
+				mov after_boom_mov, 0
+	
+		
+		exit: 
+			ret
+	ret
+	collision_manager2 ENDP
+
+	
+	explode PROC																	; explosion animation
+		
+		cmp boom_img_change, 1														; check if needs to change the frame of the animation
+		je change																	; if yes - jump change
+		jmp exiting																	; if not - jump exiting
+
+		change:
+			cmp boom_jmp, 176														; checks if reached last frame (all frames * 16 + 16)
+			je last_exit															; if yes - jump last_exit																
+			mov ebx, boom_jmp														; mov to ebx the next image placement in the array 
+			mov eax,  boom_obj[ebx].surface											; moving all neccessary image data to current_boom Img
+			mov current_boom.surface, eax
+			mov eax, boom_obj[ebx].iwidth
+			mov current_boom.iwidth, eax;
+			mov eax, boom_obj[ebx].iheight
+			mov current_boom.iheight, eax
+			mov eax, boom_obj[ebx].hasSrcKey
+			mov current_boom.hasSrcKey, eax
+			add boom_jmp, 16														; add to the placement 1Img (1Img = 4 DWORD = 16 BYTE)
+		
+		exiting:
+			cmp boom_in_process, 0													; check if explosion animaion is on
+			je exit																	; if not - jump exit
+			invoke drd_imageSetTransparent, offset current_boom, 032c832h			; if yes - make the background color transparent and draw the current frame
+			invoke drd_imageDraw, offset current_boom, boom_x, boom_y
+			jmp exit
+
+		last_exit:																	; when the animatin ends
+			mov boom_jmp, 0															; initializing all movements and explosion variables and placement in array
+			mov boom_in_process, 0
+			mov after_boom_mov, 1
+			invoke ship_change
+
+		exit:
+			ret
+				
+	ret 
+	explode ENDP
+
+	change_hearts PROC																; checks hearts when ship gone 
+		
+		cmp heart_amount, 1															; if hearts amount is 1 - game over because lack of hearts
+		je over
+		dec heart_amount															; if not - decrease heart amount
+		jmp exit
+
+		over:
+			mov game_over, 1 
+		exit:
+	ret
+	change_hearts ENDP
+
+	;hud and score
+	hud_draw PROC
+		
+		invoke drd_imageDraw, offset hud_obj, 0, 0				; draws the rectangle where all stats will be displayed 
+		
+		pusha													; drawing the hearts
+		xor esi, esi											; draw the hearts in a loop that runs heart_amount times
+		heart_draw:												; esi will be the counter
+		mov eax, heart_amount										
+		cmp esi, eax											; checking if the counter is bigger than the amount 
+		jge draw_torpedo										; if yes - jump draw-torpedo
+		
+		mov eax, esi											; if not:
+		mov ebx, heart_obj.iwidth								; multiply the counter by (heart width - 4) and than add heart x
+		sub ebx, 4												; so every time a heart is drawn it's placement will be differnt
+		mul ebx
+		add eax, heart_x
+		invoke drd_imageDraw, offset heart_obj, eax, 6			; draw the heart in the location calculated
+		inc esi													; increase the counter
+		jmp heart_draw											; do it again
+		
+		draw_torpedo:											; same as heart_draw but another image and the images are a little bit one on another
+		popa
+		pusha 
+		xor esi, esi
+		torpedo_draw:
+		mov eax, mini_torpedo_amount
+		cmp esi, eax
+		jge draw_score
+		
+		mov eax, esi
+		mov ebx, 8
+		mul ebx
+		add eax, mini_torpedo_x
+		invoke drd_imageDraw, offset mini_torpedo_obj, eax, 10 
+		inc esi
+		jmp torpedo_draw
+
+		draw_score:																;draw the board where the score will be displayed and the current score
+		popa
+			invoke drd_imageDraw, offset score_board_obj, score_board_x, 0
+			invoke drd_imageDraw, offset current_score, score_x, score_y
+		
+
+	ret 
+	hud_draw ENDP
+	 
+	ship_movement PROC							; movement of the ship when whole image is inside the screen 
+	
+		cmp ship_x, 0							; check if ship x is smaller then 0			
+		jl boundry								; if yes - jump boundry
+		
+		mov eax, screen_w						; checking if the ship's rightest part is out of the screen
+		sub eax, current_ship.iwidth			; if yes - jump boundry
+		cmp ship_x, eax
+		jg boundry
+
+		mov ship_out_of_bound, 0				; if not - extra sure that it's not set as outside
+		jmp continue							; then jump continue
+		
+		boundry:								; set that the shio is out if screen
+		mov ship_out_of_bound, 1
+		jmp continue
+
+
+		continue:								; check if the ship should move (not while explosion animation is running)
+		cmp after_boom_mov, 1					
+		je check_dir							; if should move - jump check_dir
+		jmp exit								; if not - exit, dont move the ship
+		
+		check_dir:                              ; checking the direction of the ship 
+			cmp dir, 1							; 1 is right, -1 is left
+			je right
+			jmp left
+
+		right:	
+			mov eax, screen_w					; check that the ship is in bound 
+			sub eax, current_ship.iwidth        ; if not - state it and jump exit
+			sub eax, ship_speed					; if yes - add the speed to ship_x
+			mov ebx, ship_speed
+			cmp ship_x, eax
+			jg rightest
+
+			add ship_x, ebx
+			jmp exit
+		
+			rightest:
+				mov ship_out_of_bound, 1
+				jmp exit
+
+		left:									; same but subtracting the speed so the ship moves left
+			mov eax, ship_speed
+			cmp ship_x, eax
+			jl leftest
+			
+			sub ship_x, eax
+			jmp exit
+			
+			leftest:
+				mov ship_out_of_bound, 1
+				jmp exit 
+		
+	
+		exit:
+			ret
+
+	ret
+	ship_movement ENDP
+
+		draw_all PROC															; draws background and cannon
+																				; invoke hud_draw which draws static images and stats
+			invoke drd_imageDraw, offset background_obj, 0, 0
+			invoke drd_imageDraw, offset cannon_obj, cannon_x, 560
+			invoke hud_draw
+
+			exit:
+		ret
+		draw_all ENDP
+
+		draw_ship PROC											; drawing the ship															
+				
+			cmp ship_out_of_bound, 0							; checks if in bound
+			je ship_normal_draw									; if yes - jump ship_normal_draw
+			cmp dir, 1											; if not - check direction
+			je bound_to_right										; if right - jump bound_to_right
+			
+			bound_to_left:											; if not - do bound_left
+			mov eax, ship_x											; when going left check if the ship had passed 
+			sub eax, ship_speed										; the left side of the screen
+			cmp eax, 0
+			jl leftest												; if yes - jump leftest
+			mov eax, screen_w										; if not(means part of the ship is beyond right side of screen) - 
+			sub eax, ship_x											; calculate how much pixels to add from the start of the image to the cropped image
+			sub eax, ship_speed										; that will be displayed
+			
+			invoke drd_imageDrawCrop, offset current_ship, ship_x, ship_y, 0, 0, eax, current_ship.iheight    ; draw the right cropped image 
+			jmp exit
+			
+			leftest:												; same but this time I decrease the width from the start of the image
+			mov eax, ship_x
+			neg eax
+			add eax, ship_speed
+			mov ebx, current_ship.iwidth
+			sub ebx, eax
+			invoke drd_imageDrawCrop, offset current_ship, 0, ship_y, eax, 0, ebx, current_ship.iheight
+			
+			mov eax, ship_x									; check if there is more part of the image to show
+			add eax, current_ship.iwidth					; or all of it gone beyond the screen
+			sub eax, ship_speed
+			sub eax, 1
+			cmp eax, 0
+			jg move_l										; if there is more to show - jump move_l
+
+			invoke ship_change								; if not - invoke ship_change 
+			invoke change_hearts							; and change_hearts
+			jmp exit
+		
+			bound_to_right:									; same as bound_to_left but to the other side
+			cmp ship_x, 0
+			jg rightest
+			mov eax, current_ship.iwidth
+			mov ebx, ship_x
+			neg ebx
+			sub eax, ebx
+			invoke drd_imageDrawCrop, offset current_ship, 0, ship_y, ebx, 0, eax, current_ship.iheight
+			jmp exit
+
+			rightest:
+			mov eax, screen_w
+			sub eax, ship_x
+			sub eax, ship_speed
+			invoke drd_imageDrawCrop, offset current_ship, ship_x, ship_y, 0, 0, eax, current_ship.iheight
+			mov eax, screen_w
+			sub eax, ship_speed
+			sub eax, 1
+			cmp ship_x, eax
+			jl move_r
+		
+			invoke ship_change
+			invoke change_hearts
+			jmp exit
+
+
+			
+			ship_normal_draw:														; when the ship is fully in screen draw it normally 
+			invoke drd_imageDraw, offset current_ship, ship_x, ship_y
+			jmp exit
+
+			move_r:																	; moving right when out of screen
+			cmp after_boom_mov, 0													; check if the ship should move
+			je exit																	; if not - exit
+			mov ebx, ship_speed														; if yes - add speed to ship x
+			add ship_x, ebx
+			jmp exit
+	
+			move_l:																	; same as move_r but for movement to the left
+			cmp after_boom_mov, 0
+			je exit
+			mov ebx, ship_speed
+			sub ship_x, ebx
+			jmp exit
+
+			exit:
+
+		ret
+		draw_ship ENDP
+		
+
+	;main
+	main PROC
+			
+			invoke drd_init, screen_w, screen_h, 0											;initializing window and loading all screens that are not in the game
+			invoke drd_imageLoadFile, offset start_img, offset start_obj					; start, about and how to play screens
+			invoke drd_imageLoadFile, offset about_game_img, offset about_game_obj				
+			invoke drd_imageLoadFile, offset about_p_img, offset about_p_obj
+			invoke drd_imageLoadFile, offset how_img, offset how_obj
+			invoke PlaySound,addr s_music, offset s_music,SND_ASYNC							; starting music
+
+
+	start:																					; drawing start screen 
+			
+		invoke drd_imageDraw, offset start_obj, 0, 0	
+		invoke drd_flip
+		invoke drd_processMessages
+		invoke GetAsyncKeyState, VK_SPACE													; if 'SPACE' is pressed - start the game
+		cmp eax, 0
+		jne start_game
+
+		invoke GetAsyncKeyState, VK_A														; if 'A' is pressed - jump about_game
+ 		cmp eax, 0
+		jne about_game
+
+		invoke GetAsyncKeyState, VK_H														; if 'H' is pressed - jump how_to
+		cmp eax, 0
+		jne how_to
+	
+	jmp start
+
+	about_game:																				; drawing about game screen
+		
+		invoke drd_imageDraw, offset about_game_obj, 0, 0	
+		invoke drd_processMessages
+		invoke drd_flip
+		
+		;return to starting screen game
+		invoke GetAsyncKeyState, VK_ESCAPE													; if 'Esc' is pressed - return to start screen
+		cmp eax, 0
+		jne start
+
+		;going to about project
+		invoke GetAsyncKeyState, VK_SPACE													; if 'SPACE' is pressed - jump about_project
+		cmp eax, 0
+		jne about_project
+
+	jmp about_game
+
+	about_project:																			; drawing about project screen
+	
+		invoke drd_imageDraw, offset about_p_obj, 0, 0						
+		invoke drd_processMessages
+		invoke drd_flip
+		
+		;return to starting screen game
+		invoke GetAsyncKeyState, VK_ESCAPE													; if 'Esc' is pressed - return to start screen
+		cmp eax, 0
+		jne start
+
+	jmp about_project
+
+	how_to:																					; drawing how to play screen
+
+		invoke drd_imageDraw, offset how_obj, 0, 0	
+		invoke drd_processMessages
+		invoke drd_flip
+		
+		;return to starting screen game
+		invoke GetAsyncKeyState, VK_ESCAPE													; if 'Esc' is pressed - return to start screen
+		cmp eax, 0	
+		jne start
+
+	jmp how_to
+
+	start_game:																				; loading images, initializing every variable that should be initialized
+	invoke init																				; starts music
+	invoke Sleep, 200 ;Prevent accidental torpedo shoot
+	invoke PlaySound,NULL,NULL,SND_ASYNC
+	invoke PlaySound,addr music,offset music,SND_ASYNC 
+ 
+
+	gameLoop:
+
+		invoke drd_imageSetTransparent, offset cannon_obj, 0525252h		; setting background color of images transparent
+		invoke drd_imageSetTransparent, offset current_ship, 0525252h
+		invoke drd_imageSetTransparent, offset heart_obj, 032c832h
+		invoke drd_imageSetTransparent, offset mini_torpedo_obj, 032c832h
+		invoke drd_imageSetTransparent, offset current_score, 0000000h
+		invoke drd_processMessages										; making the window accesible
+		invoke Sleep, 20												; slowing the game a bit
+		invoke draw_all													; invoking the functions that were written above
+		invoke turn														; every frame (every time the loop loops)					
+		invoke ship_movement
+		invoke draw_ship
+		invoke explode
+		invoke cannon_movement
+ 		invoke torpedo_movement
+		invoke collision_manager1
+		invoke collision_manager2
+		invoke drd_flip													; displaying all drawn image from the back buffer to the screen
+		cmp game_over, 1												; checking if game over because of hearts			
+		je gameOverh													; if yes - jump gameOverh
+		cmp game_over, 2												; checking if game over because of torpedos	
+		je gameOvert													; if yes - jump gameOvert
+		cmp game_over, 3												; checking if won
+		je win															; if yes - jump win
+
+	jmp gameLoop														; if no win or lose has been determined - continue to the next frame
+
+	gameOverh:															; displaying game over because of hearts screen 
+
+		cmp boom_in_process, 1											; checking if explosion in process
+		je gameLoop														; if yes - continue until not
+
+		cmp in_process, 1												; checking if torpedo is in movement
+		je gameLoop														; if yes - continue until not
+
+		invoke drd_imageDraw, offset over_h_obj, 0, 0	
+		invoke drd_processMessages
+		invoke drd_flip
+		
+		;restart game
+		invoke GetAsyncKeyState, VK_SPACE								; if 'SPACE' is pressed - restart game
+		cmp eax, 0
+		jne start_game
+
+		;exit
+		invoke GetAsyncKeyState, VK_ESCAPE								; if 'Esc' is pressed - exit game
+		cmp eax, 0
+		jne finish
+
+	jmp gameOverh
+	
+	gameOvert:															; exactly the same like gameOverh but showing 
+																		; game over because torpedos image
+		cmp boom_in_process, 1
+		je gameLoop
+
+		cmp in_process, 1
+		je gameLoop
+
+		invoke drd_imageDraw, offset over_t_obj, 0, 0	
+		invoke drd_processMessages
+		invoke drd_flip
+		
+		;restart game
+		invoke GetAsyncKeyState, VK_SPACE
+		cmp eax, 0
+		jne start_game
+
+		;exit
+		invoke GetAsyncKeyState, VK_ESCAPE
+		cmp eax, 0
+		jne finish
+
+	jmp gameOvert
+
+	win:																; exactly the same like gameOvert but showing win image
+		
+		cmp boom_in_process, 1
+		je gameLoop
+
+		cmp in_process, 1
+		je gameLoop
+
+		invoke drd_imageDraw, offset win_obj, 0, 0	
+		invoke drd_flip
+		invoke drd_processMessages
+	
+		;restart game
+		invoke GetAsyncKeyState, VK_SPACE
+		cmp eax, 0
+		jne start_game
+
+		;exit
+		invoke GetAsyncKeyState, VK_ESCAPE
+		cmp eax, 0
+		jne finish
+
+	 jmp win
+
+	finish:												; exiting game an terminating program
+	invoke ExitProcess, 0
+	
+	ret
+	main ENDP
+
+	end main
